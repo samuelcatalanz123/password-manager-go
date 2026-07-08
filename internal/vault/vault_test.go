@@ -2,6 +2,7 @@ package vault
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -49,6 +50,34 @@ func TestDelete(t *testing.T) {
 	}
 	if len(v.Entries) != 1 || v.Entries[0].Site != "b" {
 		t.Fatalf("borrado incorrecto: %+v", v.Entries)
+	}
+}
+
+// El guardado debe ser atómico: tras varios Save no debe quedar ningún archivo
+// temporal (.caja-*.tmp) en la carpeta, y la caja debe seguir abriéndose bien.
+func TestSaveEsAtomicoYNoDejaBasura(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "caja.vault")
+	v, err := Create(path, "maestra")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := v.Add(Entry{Site: "sitio", Username: "u", Password: "p"}); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	entradas, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entradas {
+		if e.Name() != "caja.vault" {
+			t.Fatalf("quedó basura en la carpeta: %q (el guardado dejó temporales)", e.Name())
+		}
+	}
+	if _, err := Open(path, "maestra"); err != nil {
+		t.Fatalf("la caja debería seguir abriéndose tras varios guardados: %v", err)
 	}
 }
 

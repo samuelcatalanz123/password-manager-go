@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 )
 
 // ErrWrongPassword indica que la contraseña maestra no es correcta.
@@ -66,7 +67,10 @@ func Open(path, master string) (*Vault, error) {
 	return &Vault{path: path, salt: salt, key: key, Entries: entries}, nil
 }
 
-// Save cifra las entradas y reescribe el archivo (salt || nonce || ciphertext).
+// Save cifra las entradas y reescribe el archivo de forma ATÓMICA: escribe
+// primero en un temporal (misma carpeta), lo vuelca a disco y luego lo renombra
+// encima del original. Así, si se corta la luz a mitad, la caja nunca queda
+// corrupta: o queda entera la vieja, o entera la nueva. (salt || nonce || ciphertext)
 func (v *Vault) Save() error {
 	plain, err := json.Marshal(v.Entries)
 	if err != nil {
@@ -77,7 +81,30 @@ func (v *Vault) Save() error {
 		return err
 	}
 	out := append(append([]byte{}, v.salt...), body...)
-	return os.WriteFile(v.path, out, 0o600)
+
+	tmp, err := os.CreateTemp(filepath.Dir(v.path), ".caja-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // si algo falla antes del rename, no dejamos basura
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil { // asegura que esté en disco antes de renombrar
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, v.path) // renombrar es atómico
 }
 
 // Add añade una entrada y guarda.
